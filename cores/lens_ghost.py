@@ -29,8 +29,10 @@ def create_ghost(
     ghost_tail_strength: float = 0.0,  # ゴーストの尾の強さ (内部用)
     random_seed: int = None,  # 乱数シード
 ) -> np.ndarray:
-    if image.dtype != np.float32:
+    if np.issubdtype(image.dtype, np.integer):
         image = image.astype(np.float32) / 255.0
+    elif image.dtype != np.float32:
+        image = image.astype(np.float32)
 
     img_height, img_width = image.shape[:2]
     ghosted_image = image.copy()

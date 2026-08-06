@@ -1577,6 +1577,7 @@ class CircularGradientMask(BaseMask):
                 if sy_eff < 1e-6:
                     sy_eff = 1.0
             except Exception:
+                # 高頻度経路のためログ抑制
                 sx_eff = 1.0
                 sy_eff = 1.0
             self.outer_radius_x = base_r_tcg / sx_eff
@@ -1807,6 +1808,7 @@ class CircularGradientMask(BaseMask):
             ])
             full_jacobian = J_mat @ R_rad @ F
         except Exception:
+            # 高頻度経路のためログ抑制
             return rx_tcg, ry_tcg, self.editor.get_rotate_rad(self.rotate_rad)
 
         # 楕円軸ベクトル (TCG image-coord, Y-down)
@@ -1822,6 +1824,7 @@ class CircularGradientMask(BaseMask):
         try:
             U, S, _ = np.linalg.svd(Mat)
         except np.linalg.LinAlgError:
+            # 高頻度経路のためログ抑制
             return rx_tcg, ry_tcg, self.editor.get_rotate_rad(self.rotate_rad)
 
         new_rx = float(S[0]) if len(S) > 0 else rx_tcg
@@ -2633,6 +2636,7 @@ class FreeDrawMask(BaseMask):
             check = getattr(root, 'is_liquify_editor_active', None)
             is_liquify_active = bool(check()) if callable(check) else False
         except Exception:
+            # 高頻度経路のためログ抑制
             is_liquify_active = False
         if is_liquify_active:
             self.brush_color.rgba = (0, 0, 0, 0)
@@ -2766,6 +2770,7 @@ class FreeDrawMask(BaseMask):
         try:
             hardness = self._draw_brush_hardness()
         except Exception:
+            # 高頻度経路のためログ抑制
             hardness = 100.0
         inner_size = max(0.0, brush_size * (hardness / 100.0))
         inner_off = (brush_size - inner_size) / 2.0
@@ -2793,6 +2798,7 @@ class FreeDrawMask(BaseMask):
         try:
             line_index = self.lines.index(self.current_line)
         except ValueError:
+            # 高頻度経路のためログ抑制
             line_index = len(copy_lines) - 1
         if line_index < 0 or line_index >= len(copy_lines):
             return None
@@ -3059,6 +3065,7 @@ class PolylineMask(BaseMask):
             try:
                 self.preview_line.points = []
             except Exception:
+                # 高頻度経路のためログ抑制
                 pass
             return
         self.brush_color.rgba = (1, 1, 1, 1)
@@ -3373,6 +3380,7 @@ class PolylineMask(BaseMask):
             try:
                 self.polylines[pi].points[vi] = (instance.ctrl_center[0], instance.ctrl_center[1])
             except (IndexError, AttributeError):
+                # 高頻度経路のためログ抑制
                 return
             # ControlPoint の見た目位置も更新 (ctrl_center だけでは center が動かない)
             new_center = (instance.ctrl_center[0], instance.ctrl_center[1])
@@ -3403,6 +3411,7 @@ class PolylineMask(BaseMask):
                 else:
                     cp.center = (px, py)
             except (IndexError, AttributeError):
+                # 高頻度経路のためログ抑制
                 pass
         # 中心 ControlPoint の center も追従
         super_cp_iter = (cp for cp in self.control_points if cp.is_center)
@@ -3428,6 +3437,7 @@ class PolylineMask(BaseMask):
         try:
             hardness = self._draw_brush_hardness()
         except Exception:
+            # 高頻度経路のためログ抑制
             hardness = 100.0
         inner_size = max(0.0, brush_size * (hardness / 100.0))
         inner_off = (brush_size - inner_size) / 2.0
@@ -4373,6 +4383,11 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
         self.mask_container = KVWidget()
         self.add_widget(self.mask_container)
         self.rectangle = None
+        # draw_mask_image() 用キャッシュ: サイズが変わらない限りバッファ/テクスチャを
+        # 使い回し、ドラッグ中の連続オーバーレイ更新での再アロケーションを避ける。
+        self._overlay_la_img = None
+        self._overlay_texture = None
+        self._overlay_texture_size = None
 
         self.created_mask = None
         # 作成中マスクはまだ CompositMask.mask_list に未登録なので、
@@ -4758,17 +4773,20 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
                     # なんでもいいから親探す
                     composit_mask = self.find_composit_mask(mask, index)
                     if composit_mask is None:
-                        logging.error("Composit mask not found")
-                        assert False
-
-                    # インデクスがコンポジットマスクの中の何番目かを調べる
-                    composit_mask_index = 0
-                    for i in range(index-1, -1, -1):
-                        composit_mask = self.mask_list[i]
-                        if composit_mask.is_composit():
-                            composit_mask_index = index - 1 - i
-                            break
-                    composit_mask.add_mask(mask, op_type, composit_mask_index)
+                        # python -O では assert が消えて add_mask(None, ...) が実行され
+                        # AttributeError で落ちる。親が見つからない場合でも mask 自体は
+                        # 既に _create_mask() で mask_container / mask_list に登録済みなので、
+                        # コンポジットへの所属付けだけ諦めてトップレベルのマスクとして残す。
+                        logging.error("update_layer: Create - Composit mask not found for index=%s; leaving mask unattached at top level", index)
+                    else:
+                        # インデクスがコンポジットマスクの中の何番目かを調べる
+                        composit_mask_index = 0
+                        for i in range(index-1, -1, -1):
+                            composit_mask = self.mask_list[i]
+                            if composit_mask.is_composit():
+                                composit_mask_index = index - 1 - i
+                                break
+                        composit_mask.add_mask(mask, op_type, composit_mask_index)
                 self.set_active_mask(mask)
                 self.request_mask_render_update(
                     mask,
@@ -4795,9 +4813,11 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
                 )
 
             case _:
+                # python -O では assert が消えて何もせず抜けてしまう。ここは元々
+                # undo/redo リプレイ経由で来る想定外の op 文字列を検出するためだけの
+                # ガードなので、ログを残して何もせずに戻る(呼び出し側は戻り値を見ない)。
                 logging.error("Invalid operation: " + op)
-                assert False
-    
+
     # LayerCtrl用
     def get_layer(self, index):
         return self.get_mask(index)
@@ -4849,7 +4869,8 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
             if self.rectangle is not None:
                 try:
                     self.mask_container.canvas.before.remove(self.rectangle)
-                except:
+                except ValueError:
+                    # 既にcanvasから除去済みのレース（無害）
                     pass
                 self.rectangle = None
             self.draw_mask_image(None)
@@ -4877,6 +4898,8 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
         try:
             return self._mask_parent_for_visibility(mask)
         except Exception:
+            # 親Composit解決に失敗するとキャッシュ無効化対象が漏れ得るため記録する
+            logging.exception("request_mask_render_update: composit resolution failed")
             return None
 
     def _invalidate_mask_render_family(self, mask):
@@ -4969,39 +4992,80 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
     def draw_mask_image(self, glayimg):
         if self._overlay_control_points_hidden and glayimg is not None:
             return
-        if self.rectangle is not None:
-            try:
-                self.mask_container.canvas.before.remove(self.rectangle)
-            except ValueError:
-                # canvas からは既に消えているが参照だけ残っていた (state 不整合)
-                pass
-            self.rectangle = None
 
-        if glayimg is not None:
-            with self._matrix_lock:
-                texture_size = tuple(self.texture_size)
-                disp_info = params.get_disp_info(self.tcg_info) if getattr(self, "tcg_info", None) is not None else None
-                rect = self._get_mask_image_rect(texture_size)
-            _mask_zoom_sync_debug(
-                "mask_editor.draw_mask_image mask_shape=%s texture_size=%s disp=%s rect=%s",
-                getattr(glayimg, "shape", None), texture_size, disp_info, rect,
-            )
+        if glayimg is None:
+            # オーバーレイを消す。バッファ/テクスチャは次回サイズが一致すれば
+            # 再利用できるようキャッシュしたまま、Canvas からは Rectangle だけ外す。
+            if self.rectangle is not None:
+                try:
+                    self.mask_container.canvas.before.remove(self.rectangle)
+                except ValueError:
+                    # canvas からは既に消えているが参照だけ残っていた (state 不整合)
+                    pass
+                self.rectangle = None
+            return
+
+        with self._matrix_lock:
+            texture_size = tuple(self.texture_size)
+            disp_info = params.get_disp_info(self.tcg_info) if getattr(self, "tcg_info", None) is not None else None
+            rect = self._get_mask_image_rect(texture_size)
+        _mask_zoom_sync_debug(
+            "mask_editor.draw_mask_image mask_shape=%s texture_size=%s disp=%s rect=%s",
+            getattr(glayimg, "shape", None), texture_size, disp_info, rect,
+        )
+
+        # マスクをアルファとして扱い、ルミナンスを白(1.0)にする
+        glayimg = np.clip(glayimg, 0, 1)
+        glayimg = self._clip_mask_overlay_to_image_area(glayimg, disp_info)
+        h, w = glayimg.shape[:2]
+
+        # ドラッグ中は毎フレーム呼ばれるため、サイズが変わらない間は la_img バッファ /
+        # テクスチャ / Rectangle を使い回して確保・GPU アップロード・Canvas 差し替えの
+        # churn を避ける。サイズが変わった時だけ作り直す。
+        if self._overlay_la_img is None or self._overlay_la_img.shape[:2] != (h, w):
+            self._overlay_la_img = np.empty((h, w, 2), dtype=np.float32)
+        la_img = self._overlay_la_img
+        la_img[..., 0] = 1.0  # Luminance = White
+        la_img[..., 1] = glayimg  # Alpha = Mask Value
+
+        size_changed = self._overlay_texture is None or self._overlay_texture_size != (w, h)
+        if size_changed:
+            texture = KVTexture.create(size=(w, h), colorfmt='luminance_alpha', bufferfmt='float')
+            texture.blit_buffer(la_img.tobytes(), colorfmt='luminance_alpha', bufferfmt='float')
+            # flip_vertical() はテクスチャ座標を永続的に反転させる副作用があるため、
+            # テクスチャ生成直後にちょうど一回だけ呼ぶこと。使い回し時に呼ぶと
+            # 二重反転して上下逆に表示されてしまう。
+            texture.flip_vertical()
+            self._overlay_texture = texture
+            self._overlay_texture_size = (w, h)
+        else:
+            # サイズ不変: 既存テクスチャへ中身だけ書き戻す(flip_vertical は呼ばない)。
+            texture = self._overlay_texture
+            texture.blit_buffer(la_img.tobytes(), colorfmt='luminance_alpha', bufferfmt='float')
+
+        pos, size = rect
+        if self.rectangle is not None and not size_changed:
+            # 既存 Rectangle をそのまま使い回す。テクスチャオブジェクト自体は
+            # 変わっていないので texture の再代入は不要、pos/size のみ更新する。
+            self.rectangle.pos = pos
+            self.rectangle.size = size
+            # blit_buffer によるテクスチャ内容の更新は Rectangle 側のプロパティ変更を
+            # 伴わない(pos/size が前回と同値だと Kivy 側で更新がスキップされ得る)ため、
+            # Canvas に明示的に再描画を要求する。
+            self.mask_container.canvas.before.ask_update()
+        else:
+            if self.rectangle is not None:
+                try:
+                    self.mask_container.canvas.before.remove(self.rectangle)
+                except ValueError:
+                    # canvas からは既に消えているが参照だけ残っていた (state 不整合)
+                    pass
+                self.rectangle = None
             with self.mask_container.canvas.before:
-                # マスクをアルファとして扱い、ルミナンスを白(1.0)にする
-                glayimg = np.clip(glayimg, 0, 1)
-                glayimg = self._clip_mask_overlay_to_image_area(glayimg, disp_info)
-                h, w = glayimg.shape[:2]
-                la_img = np.empty((h, w, 2), dtype=np.float32)
-                la_img[..., 0] = 1.0  # Luminance = White
-                la_img[..., 1] = glayimg  # Alpha = Mask Value
-                texture = KVTexture.create(size=(w, h), colorfmt='luminance_alpha', bufferfmt='float')
-                texture.blit_buffer(la_img.tobytes(), colorfmt='luminance_alpha', bufferfmt='float')
-                texture.flip_vertical()
-                pos, size = rect
                 KVColor(1, 0, 0, 0.4)
                 self.rectangle = KVRectangle(texture=texture, pos=pos, size=size)
 
-                # cv2.imwrite('combined_mask.png', (glayimg*255).astype(np.uint8))
+        # cv2.imwrite('combined_mask.png', (glayimg*255).astype(np.uint8))
 
     def _create_start_new_mask(self, type, op_type, index=0):
         # 画像サイズがまだ設定されていない場合、マスクの作成をスキップ
@@ -5138,8 +5202,13 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
             case MaskType.COMPOSIT:
                 mask = CompositMask(editor=self)
             case _:
+                # python -O では assert が消え、mask 未代入のまま return mask に到達して
+                # UnboundLocalError という分かりにくい例外になる(通常実行でも assert で
+                # 落ちるだけで理由が分かりにくい)。未知のタイプ用に代替マスクを捏造すると
+                # mask_container / mask_list に不正なオブジェクトが混入するため、ここは
+                # graceful degradation ではなく明示的な例外にして早期に原因を特定できるようにする。
                 logging.error(f"MaskEditor: 不明なマスクタイプ: {mask_type}")
-                assert False
+                raise ValueError(f"MaskEditor: 不明なマスクタイプ: {mask_type}")
 
         return mask
 
@@ -5254,8 +5323,11 @@ class MaskEditor2(KVFloatLayout, LayerCtrl):
             composit_mask.remove_mask(mask)
             removed_parent = composit_mask
         else:
-            logging.error(f"MaskEditor: 親が見つかりませんでした。マスクを削除できません。")
-            assert False
+            # python -O では assert が消えて何事もなかったかのように後続処理に進む。
+            # ここは元々「親が見つからない」ケースを検出するだけのガードなので、
+            # ログだけ残してコンテナ/mask_list からの削除は通常どおり続行する
+            # (親への所属解除ができないだけで、エディタ上からは消える)。
+            logging.error(f"MaskEditor: 親が見つかりませんでした。所属解除はスキップして削除を続行します。")
 
         # コンテナから削除
         self.mask_container.remove_widget(mask)

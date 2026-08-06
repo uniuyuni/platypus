@@ -86,6 +86,7 @@ def _install_default_menu_bar(app):
     try:
         app.setWindowsMenu_(window_menu)
     except Exception:
+        # Windowメニュー登録のCocoa側ベストエフォート（失敗してもメニューバー自体は表示される）
         pass
 
 
@@ -126,6 +127,7 @@ def _install_dock_icon(app):
         try:
             app.setApplicationIconImage_(icon)
         except Exception:
+            # Dockアイコン設定のCocoa側ベストエフォート（失敗してもデフォルトアイコンで動作継続）
             pass
 
 
@@ -156,12 +158,14 @@ def display_splash_screen(image_path):
         if app.activationPolicy() != 0:  # NSApplicationActivationPolicyRegular 以外
             app.setActivationPolicy_(getattr(AppKit, "NSApplicationActivationPolicyRegular", 0))
     except Exception:
+        # activationPolicy設定のCocoa側ベストエフォート(失敗してもスプラッシュ表示は続行)
         pass
 
     # finishLaunching より前に Dock アイコンを ShadeWave に固定（python ロケット化け対策）。
     try:
         _install_dock_icon(app)
     except Exception:
+        # Dockアイコン設定のCocoa側ベストエフォート(失敗してもデフォルトアイコンで動作継続)
         pass
 
     style = getattr(AppKit, "NSWindowStyleMaskBorderless", 0)
@@ -179,6 +183,7 @@ def display_splash_screen(image_path):
         try:
             _win.setCollectionBehavior_(cb)
         except Exception:
+            # collectionBehavior設定のCocoa側ベストエフォート
             pass
 
     view = NSImageView.alloc().initWithFrame_(NSMakeRect(0.0, 0.0, w, h))
@@ -197,15 +202,18 @@ def display_splash_screen(image_path):
     try:
         NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
     except Exception:
+        # ランループ処理のCocoa側ベストエフォート(失敗しても以降の初期化は続行)
         pass
 
     try:
         _install_default_menu_bar(app)
     except Exception:
+        # メニューバー構築のCocoa側ベストエフォート(失敗してもスプラッシュ表示は続行)
         pass
     try:
         app.finishLaunching()
     except Exception:
+        # finishLaunchingのCocoa側ベストエフォート
         pass
 
     # スプラッシュを最前面に保ち、メニューバーを即時表示させるためアプリを活性化。
@@ -214,6 +222,7 @@ def display_splash_screen(image_path):
         app.activateIgnoringOtherApps_(True)
         NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.02))
     except Exception:
+        # アプリ活性化のCocoa側ベストエフォート
         pass
 
 
@@ -225,6 +234,7 @@ def close_splash_screen():
             _win.orderOut_(None)
             _win.close()
         except Exception:
+            # ウィンドウクローズのCocoa側ベストエフォート(失敗しても_winは破棄する)
             pass
         _win = None
 

@@ -98,7 +98,8 @@ def _task_callback(file_callbacks, shared_resources, future):
                     # 形式: (imgset, exif_data, param, history)
                     current_history = shared_resources['cache'][file_path][3]
                 except Exception:
-                    pass
+                    # Historyを引き継げないと当該ファイルの undo/redo 履歴が失われるため記録する
+                    logging.exception("FCS: failed to carry over existing history for %s", file_path)
 
             shared_resources['cache'][file_path] = (imgset, exif_data, param.copy(), current_history)
 

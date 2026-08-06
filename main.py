@@ -92,6 +92,7 @@ if __name__ == '__main__':
         #matplotlib.interactive(False)
         pass
     except ImportError:
+        # matplotlib import自体が無効化されているため実質到達しない（無害）
         pass
 
     # PyInstaller + Kivy 既定フックでは tkinter が除外される。バンドル実行時はスキップ。
@@ -240,6 +241,7 @@ if __name__ != '__main__':
 
 import os
 import copy
+import dataclasses
 import numpy as np
 import cv2
 
@@ -254,6 +256,26 @@ HISTOGRAM_DECIMATION = 2
 # 未処理バージョンの最大ラグ。これを超えたら中間フレームを捨てて最新版へ追いつく。
 # ドラッグを止めた後に積み残しの描画で UI が固まる(クロップ枠が動かせない)のを防ぐ。
 _PREVIEW_DRAIN_MAX_LAG = 2
+
+
+@dataclasses.dataclass(frozen=True)
+class _DrawRequest:
+    """draw_image ワーカーに渡す「version + 描画フラグ束」の不変スナップショット。
+
+    アトミック性の不変条件: version とそれに対応する4つのフラグ(center/
+    fast_display/skip_histogram/drag_quality)は必ずこのオブジェクト1つに
+    まとめて生成し、UI スレッド側は `self._draw_request = _DrawRequest(...)`
+    という1回の代入で公開する。ワーカースレッド側も `request = self._draw_request`
+    という1回の代入で丸ごと取得してから各フィールドを読む。version とフラグを
+    個別に代入/読み取りすると、その間に次の start_draw_image が割り込んで
+    「新しい version なのにフラグは古い(またはその逆)」という中途半端な組み
+    合わせを観測しうる(GIL はバイトコード単位でしか排他しないため)。
+    """
+    version: int
+    center: object = None
+    fast_display: bool = False
+    skip_histogram: bool = False
+    drag_quality: bool = False
 
 
 def _debug_display_stats(label, img):
@@ -476,11 +498,9 @@ if __name__ == '__main__':
             self._preview_focus_refresh_event = None
             self._preview_focus_late_refresh_event = None
             self._preview_focus_layout_pending = False
-            
-            self.apply_draw_image_center = None
-            self.apply_draw_fast_display = False
-            self.apply_draw_skip_histogram = False
-            self.apply_draw_drag_quality = False
+
+            # version + 描画フラグ束のアトミックなスナップショット(_DrawRequest 参照)。
+            self._draw_request = _DrawRequest(version=self.pipeline_version)
             # ParamSlider の連続ドラッグ中フラグ。ドラッグ中のフレームは lv1-lv2 を
             # 半解像度で回し(pipeline 側)、リリース時に必ずフル解像度で描き直す。
             self._param_slider_dragging = False
@@ -1878,12 +1898,17 @@ if __name__ == '__main__':
                     self.draw_event.wait(timeout=0.1)
                     self.draw_event.clear()
 
-                current_version = self.pipeline_version
+                # version とフラグ束を _draw_request 1個の代入でまとめて取得する。
+                # 個別に self.pipeline_version / self.apply_draw_* を読むと、その間に
+                # 別の start_draw_image が割り込んで「version は新しいのにフラグは
+                # 古い(またはその逆)」という中途半端な組み合わせを観測しうる。
+                request = self._draw_request
+                current_version = request.version
                 if last_processed_version < current_version:
-                    center_pos = self.apply_draw_image_center
-                    fast_display = self.apply_draw_fast_display
-                    skip_histogram = self.apply_draw_skip_histogram
-                    drag_quality = self.apply_draw_drag_quality
+                    center_pos = request.center
+                    fast_display = request.fast_display
+                    skip_histogram = request.skip_histogram
+                    drag_quality = request.drag_quality
                     try:
                         current_tab = self.ids["effects"].current_tab.text
                     except Exception:
@@ -1938,10 +1963,14 @@ if __name__ == '__main__':
             if invalidate_crop:
                 self.crop_image = None
             self.pipeline_version += 1
-            self.apply_draw_image_center = center_pos
-            self.apply_draw_fast_display = fast_display
-            self.apply_draw_skip_histogram = skip_histogram
-            self.apply_draw_drag_quality = drag_quality
+            # version + フラグ束を1回の代入でアトミックに公開する(_DrawRequest 参照)。
+            self._draw_request = _DrawRequest(
+                version=self.pipeline_version,
+                center=center_pos,
+                fast_display=fast_display,
+                skip_histogram=skip_histogram,
+                drag_quality=drag_quality,
+            )
             if drag_quality:
                 self._drag_quality_frame_pending = True
             self.processor.set_pipeline_version(self.pipeline_version)
@@ -1961,6 +1990,12 @@ if __name__ == '__main__':
             if invalidate_crop:
                 self.crop_image = None
             self.pipeline_version += 1
+            # draw_image ワーカーが current_version として参照するのは
+            # self.pipeline_version ではなく self._draw_request.version なので、
+            # ここでも version だけ追従させておく(フラグは直前の値を維持)。
+            # 揃えないと version だけ進んでワーカー側の request.version が古いまま
+            # 停滞し、last_processed_version に追いつけずビジーループしうる。
+            self._draw_request = dataclasses.replace(self._draw_request, version=self.pipeline_version)
             self.draw_image_core()
             self._last_processed_pipeline_version = self.pipeline_version
                 
@@ -2369,6 +2404,7 @@ if __name__ == '__main__':
             try:
                 yield self.primary_effects[1].get('distortion'), self.primary_param
             except Exception:
+                # primary_effects未整備等の場合はこのターゲットをスキップして次へ進む
                 pass
 
             editor = self.ids.get('mask_editor2')
@@ -3433,6 +3469,7 @@ if __name__ == '__main__':
             try:
                 os.remove(preset_path)
             except FileNotFoundError:
+                # 既に削除済みなら目的は達成済み（無害）
                 pass
             except OSError as e:
                 self.show_warning_dialog(str(e))
@@ -3620,7 +3657,7 @@ if __name__ == '__main__':
                             r = int(rating_utils.parse_exif_rating_value(ex) or 0)
                             self.ids["viewer"].set_rating_for_path(file_path, r)
                         except Exception:
-                            pass
+                            logging.exception("failed to sync rating for %s", file_path)
                     logging.debug("[PERF] on_fcs_get_file: Merged Params. Time: %s", time.time())
                     perf_trace.event("on_fcs_get_file.params_merged")
                     self.set2widget_all(self.primary_effects, self.primary_param)
@@ -4099,6 +4136,7 @@ if __name__ == '__main__':
             try:
                 stack.extend(KVWindow.children)
             except Exception:
+                # children属性を持たないウィンドウ実装への防御（走査対象が減るだけ）
                 pass
             seen = set()
             while stack:
@@ -4114,6 +4152,7 @@ if __name__ == '__main__':
                 try:
                     stack.extend(widget.children)
                 except Exception:
+                    # children属性を持たないウィジェットへの防御（走査対象が減るだけ）
                     pass
             return None
 
@@ -4791,7 +4830,8 @@ if __name__ == '__main__':
                         self.primary_effects[0]['geometry'].close_geometry_editor(self)
                         self.primary_effects[0]['crop'].sync_crop_editor_mode_from_widget(self, self.primary_param)
                 except Exception:
-                    pass
+                    # 失敗するとGeタブのエディタがMask2 ON中も開いたままになり得るため記録する
+                    logging.exception("failed to close Ge tab editor on Mask2 on")
             else:
                 kvutils.find_widget(self, 'mask2_content_panel').disabled = True
                 # Mask2 OFF: Mesh Edit モード中なら強制終了 (Mesh Edit は Mask2 ON 前提)
@@ -4814,13 +4854,15 @@ if __name__ == '__main__':
                         effects.reeffect_all(self.primary_effects, 1)
                         self.start_draw_image_and_crop(self.imgset)
                 except Exception:
-                    pass
+                    # ズーム解除が途中失敗すると表示状態が不整合になり得るため記録する
+                    logging.exception("failed to reset zoom on Mask2 off")
                 # 画像 Geometry モードへ復帰: Ge タブ上ならクロップ枠を再展開する
                 try:
                     if self.ids["effects"].current_tab.text == "Ge":
                         self.apply_effects_lv(0, "crop")
                 except Exception:
-                    pass
+                    # 失敗するとGeタブ復帰時にクロップ枠が再展開されず操作不能になり得る
+                    logging.exception("failed to reopen crop editor on Mask2 off")
 
         def set_mask2_hue_range(self, color_str):
             # イベント発火させる代入
@@ -5026,7 +5068,8 @@ if __name__ == '__main__':
                 if me.get_active_mask() is not composit:
                     me.set_active_mask(composit)
             except Exception:
-                pass
+                # active mask切替失敗はMesh Edit中の表示対象がずれた状態になり得るため記録する
+                logging.exception("failed to set active mask before mesh editor open")
             # 画像 mesh editor (effects.py GeometryEffect._open_geometry_editor) と
             # 完全に同じ順序: pos_hint 設定 → add_widget → 最後に set_correction_params。
             # set_correction_params は内部で _redraw_mesh を呼ぶため、parent 未 attach の
@@ -5268,7 +5311,8 @@ if __name__ == '__main__':
             try:
                 self.ids['mask_editor2'].commit_in_progress()
             except Exception:
-                pass
+                # 失敗すると描画途中の操作がコミットされずタブ切替後に不整合が残り得る
+                logging.exception("on_current_tab: commit_in_progress failed")
 
             # Mask Mesh edit モード中にタブを切り替えたら必ず解除する。
             # (Mesh Edit は特定タブ上の編集 UI 前提なので、他タブへ移ったら成立しない)
@@ -5634,6 +5678,7 @@ if __name__ == '__main__':
                 try:
                     KVWindow.bind(**kwargs)
                 except Exception:
+                    # プロバイダによっては一部イベント名が未対応（他のbindで代替できる）
                     pass
 
         def on_stop(self):

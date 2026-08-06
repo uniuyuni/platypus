@@ -421,8 +421,9 @@ def delete_special_param(param):
         try:
             del p[key]
         except KeyError:
+            # 元々存在しないキーは削除不要（無害）
             pass
-    
+
     return p
 
 def delete_not_special_param(param):
@@ -433,8 +434,9 @@ def delete_not_special_param(param):
             try:
                 del p[key]
             except KeyError:
+                # 元々存在しないキーは削除不要（無害）
                 pass
-    
+
     return p
 
 def copy_special_param(tar, src):
@@ -445,6 +447,7 @@ def copy_special_param(tar, src):
             val = src[key]
             tar[key] = val
         except KeyError:
+            # src側に無いキーはコピー対象外として無視（無害）
             pass
 
 def copy_remain_param(tar, src):
@@ -453,6 +456,7 @@ def copy_remain_param(tar, src):
             val = src[key]
             tar[key] = val
         except KeyError:
+            # src側に無いキーはコピー対象外として無視（無害）
             pass
 
 def _inpaint_dump(param, list_name='inpaint_diff_list'):
@@ -815,6 +819,7 @@ def load_json(file_path, param, mask_editor2, load_heavy=True):
         if dict_.get('primary_param') and 'crop_rect' in dict_['primary_param']:
             dict_['primary_param']['crop_rect'] = tuple(dict_['primary_param']['crop_rect'])
     except (KeyError, TypeError):
+        # tuple化に失敗しても後続の deserialize は元の形式のまま処理を続行できる
         pass
     deserialize(dict_, param, mask_editor2, load_heavy=load_heavy)
     param.pop("rating", None)  # 旧 pmck
@@ -933,6 +938,7 @@ def tcg_to_window(cx, cy, widget, texture_size, tcg_info, normalize=True):
                 disp_info, tcg_info['original_img_size'], device.dpi_scale(),
             )
         except Exception:
+            # デバッグログ自体の失敗でホットパスを止めないためのベストエフォート
             pass
 
     if normalize:
@@ -958,6 +964,7 @@ def tcg_to_window(cx, cy, widget, texture_size, tcg_info, normalize=True):
                 id(widget), margin_x, margin_y, wx, wy, cx, cy,
             )
         except Exception:
+            # デバッグログ自体の失敗でホットパスを止めないためのベストエフォート
             pass
 
     return (cx, cy)

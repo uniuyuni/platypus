@@ -34,6 +34,7 @@ def _mask2_widget(*, allow_over_one):
             "switch_mask2_settings": _control(active=True),
             "checkbox_mask2_invert": _control(active=False),
             "checkbox_mask2_allow_over_one": _control(active=allow_over_one),
+            "spinner_mask2_blend_mode": _control(text="Normal"),
             "switch_mask2_depth": _control(active=False),
             "slider_mask2_depth_min": _control(value=0),
             "slider_mask2_depth_max": _control(value=255),

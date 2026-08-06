@@ -145,7 +145,7 @@ def get_screens_info():
             screen_size = CGDisplayScreenSize(display_id)
             width_mm = screen_size.width
             height_mm = screen_size.height
-        except:
+        except Exception:
             # 取得できない場合は0
             width_mm = 0
             height_mm = 0
@@ -154,7 +154,7 @@ def get_screens_info():
         try:
             phys_pixels_wide = CGDisplayPixelsWide(display_id)
             phys_pixels_high = CGDisplayPixelsHigh(display_id)
-        except:
+        except Exception:
             # 取得できない場合はバッキングフレームから計算
             phys_pixels_wide = backing_frame.size.width
             phys_pixels_high = backing_frame.size.height
@@ -424,10 +424,12 @@ def _nsdata_bytes(data):
             return data
         return memoryview(data).tobytes()
     except Exception:
+        # memoryview非対応のNSDataラッパもあるため、次の変換方法にフォールバック
         pass
     try:
         return bytes(data)
     except Exception:
+        # bytes()変換不可なら最後の手段（getBytes_length_）へフォールバック
         pass
     try:
         length = int(data.length())
@@ -607,6 +609,7 @@ def _get_app_window_screen(app_name=None):
             if screen is not None:
                 return screen
     except Exception:
+        # ウィンドウ/スクリーン取得失敗時はmainScreen()にフォールバック
         pass
 
     try:
@@ -732,6 +735,7 @@ def _restore_app_window_focus() -> bool:
         if not app.isActive():
             return False
     except Exception:
+        # isActive() 取得失敗時は非アクティブ扱いにせず、以降のフォーカス処理を続行
         pass
     win = _app_main_window()
     if win is None:
@@ -1430,6 +1434,7 @@ if HAS_PYOBJC:
                 try:
                     self._win.setCollectionBehavior_(cb)
                 except Exception:
+                    # Cocoa側のベストエフォート設定（失敗してもパネル自体は使える）
                     pass
 
             content = self._win.contentView()
@@ -1496,6 +1501,7 @@ if HAS_PYOBJC:
                 try:
                     self._parent_win.removeChildWindow_(self._win)
                 except Exception:
+                    # 既にデタッチ済み等のCocoa側ベストエフォート
                     pass
             self._parent_win = main
             if main is not None:
@@ -1544,6 +1550,7 @@ if HAS_PYOBJC:
             try:
                 NSCursor.arrowCursor().set()
             except Exception:
+                # カーソル設定のCocoa側ベストエフォート
                 pass
             try:
                 import Foundation
@@ -1567,6 +1574,7 @@ if HAS_PYOBJC:
                     try:
                         event_type = event.type()
                     except Exception:
+                        # イベント種別が取得できないCocoa側ベストエフォート（未転送として扱う）
                         event_type = None
                     if event_type in self._HOUSEKEEPING_EVENT_TYPES:
                         app.sendEvent_(event)
@@ -1578,16 +1586,19 @@ if HAS_PYOBJC:
                     try:
                         event_window = event.window()
                     except Exception:
+                        # イベントの宛先ウィンドウが取得できないCocoa側ベストエフォート（転送しない）
                         event_window = None
                     if event_window is self._win:
                         app.sendEvent_(event)
             except Exception:
+                # イベントポンプ全体のベストエフォート（失敗してもオーバーレイ表示は継続）
                 pass
             try:
                 until = NSDate.dateWithTimeIntervalSinceNow_(0.02)
                 NSRunLoop.currentRunLoop().runUntilDate_(until)
                 app.updateWindows()
             except Exception:
+                # ランループ処理のCocoa側ベストエフォート
                 pass
 
         def _apply_pending(self):
@@ -1603,6 +1614,7 @@ if HAS_PYOBJC:
             try:
                 NSCursor.arrowCursor().set()
             except Exception:
+                # カーソル設定のCocoa側ベストエフォート
                 pass
 
         def update(self):
@@ -1618,6 +1630,7 @@ if HAS_PYOBJC:
                     try:
                         self._parent_win.removeChildWindow_(self._win)
                     except Exception:
+                        # 既にデタッチ済み等のCocoa側ベストエフォート
                         pass
                     self._parent_win = None
                 self._win.orderOut_(None)

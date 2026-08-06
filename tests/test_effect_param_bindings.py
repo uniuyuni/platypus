@@ -81,9 +81,14 @@ class DummyMaskEditor:
         self.cleared = 0
         self.added_masks = []
         self.delay_updates = 0
+        self.released = 0
 
     def clear_mask(self):
         self.cleared += 1
+
+    def release(self):
+        # 実装側は破棄時に Window.mouse_pos の unbind として呼ぶ
+        self.released += 1
 
     def add_mask(self, disp_info, image):
         self.added_masks.append((disp_info, image))

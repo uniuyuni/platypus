@@ -80,6 +80,8 @@ backend_utils.py（46 行）は leaf 6 関数（BackendStatus・optional import�
 
 ## 2. Medium — 正しさ・堅牢性
 
+> **2026-07-18 追記: #9〜#18 は対応済み**（config は JSONDecodeError 耐性化、カーブキャッシュキーは点データの tobytes ベースへ（計12箇所）、描画フラグは `_DrawRequest` 不変スナップショット化、`assert False` は全廃、MergeDebevec は uint8 変換経由、lens_ghost は整数 dtype のみ /255、color_resolver は例外送出化、PM_DIAG は debug 降格、`draw_mask_image` はバッファ/テクスチャ/Rectangle 再利用化、型なし except 13箇所を型付き化＋アプリ層の握りつぶしへログ/根拠コメント追加）。#19〜#21 は未着手。以下の記述は対応前の記録。
+
 ### 9. ✅ config.json 破損で起動クラッシュ
 `load_config`（config.py:123-133）は `except FileNotFoundError` のみ。不正 JSON だと `json.JSONDecodeError` が素通りし、フォールバックなしで起動時にクラッシュする。
 - 対応: `except (FileNotFoundError, json.JSONDecodeError)` にして破損時はデフォルト設定で継続＋ログ。
@@ -143,6 +145,8 @@ content_aware_fill.py:545 の `logging.warning("[PM_DIAG] ...")` が inpaint 毎
 ---
 
 ## 3. Low — 保守性・小物
+
+> **2026-07-19 追記: #24〜#28 は対応済み**（#24 二重コピー解消+0埋め辞書のヘルパ化 ／ #25 コメント修正・内側prange→range・デッドブロック削除。`rgb2hls` への `@lock_numba` は「実行区間全体のグローバル直列化」という実装のため意図的に見送り、根拠をコメント化 ／ #26 prange→range 化（数値出力はバイト一致を確認）／ #27 crop_editor:203 は調査の結果**コードが正しくコメントが誤り**と判明（FloatLayout は pos_hint なしの子の pos を動かさないため parent.pos が正しい原点）。正確な説明に置換 ／ #28 fringe_removal docstring と color.py 冒頭コメントを実装に一致させた）。既知テスト失敗2件（allow_over_one スタブ・ai_image_cache の sys.path）も解消。#22, #23, #29〜#32 は未着手。
 
 22. ✅ 死コード小物: async_worker.py:154-155 `target_effect = None` 二重代入 / 502-503 未使用 `task` / 108-473 に設計独白コメント 60 行超。main.py:532（空 on_start）/ 1859（旧描画コードのコメントアウト）。core.py:713-725（njit シグネチャ `f4[:,:]` 上到達不能な 3D マスク分岐）/ 701-706, 943-950 コメントアウト残骸。macos.py 末尾の docstring デモ＋`__main__` デモ。
 23. import 時副作用: macos.py:224（Cocoa スクリーン列挙）、imageset.py:45（libraw バージョン照会ログ）。テスト・非 GUI 環境で問題になり得る。遅延初期化推奨。

@@ -698,7 +698,12 @@ class Effect():
             try:
                 if param[p[0]] == p[1]:
                     del param[p[0]]
-            except:
+            except KeyError:
+                # 既に削除済みのキーを再度削除しようとするレース（無害）
+                pass
+            except ValueError:
+                # numpy 配列等の値は `==` が配列を返し bool 判定できない。
+                # 従来から「デフォルト一致とみなさず param に残す」動作なので維持する。
                 pass
 
 # ロード待ちエフェクト
@@ -2455,7 +2460,7 @@ class GeometryEffect(Effect):
                             try:
                                 parts = k.strip('()').split(',')
                                 key = (int(parts[0]), int(parts[1]))
-                            except:
+                            except (ValueError, IndexError):
                                 continue
                         else:
                             key = tuple(k)
@@ -4187,7 +4192,15 @@ class CurvesEffect(Effect):
         self.hash = combined_hash
 
         return self.diff
-    
+
+
+def _curve_points_hash(points):
+    # hash(np.sum(points)) は総和が不変な編集(点を左右対称に動かす等)で衝突し、
+    # LUTキャッシュが再計算されずに古い diff が残ってしまう。点座標のバイト列
+    # そのものをキーにすることで内容が変われば必ずキーも変わるようにする。
+    arr = np.asarray(points, dtype=np.float32)
+    return hash((arr.shape, arr.tobytes()))
+
 class TonecurveEffect(Effect):
     param_bindings = (
         SwitchBinding('switch_tone_curves', True, "switch_tone_curves"),
@@ -4201,7 +4214,7 @@ class TonecurveEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(pl))
+            param_hash = _curve_points_hash(pl)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4226,7 +4239,7 @@ class TonecurveRedEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(pl))
+            param_hash = _curve_points_hash(pl)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4251,7 +4264,7 @@ class TonecurveGreenEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(pl))
+            param_hash = _curve_points_hash(pl)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4277,7 +4290,7 @@ class TonecurveBlueEffect(Effect):
             self.hash = None
 
         else:
-            param_hash = hash(np.sum(pl))
+            param_hash = _curve_points_hash(pl)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4329,7 +4342,7 @@ class GradingEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash((np.sum(pl), gh, gl, gs))
+            param_hash = hash((_curve_points_hash(pl), gh, gl, gs))
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4476,7 +4489,7 @@ class HuevsHueEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash((np.sum(hh), _hue_curve_feather_kernel_size(efconfig)))
+            param_hash = hash((_curve_points_hash(hh), _hue_curve_feather_kernel_size(efconfig)))
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4501,7 +4514,7 @@ class HuevsLumEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash((np.sum(hl), _hue_curve_feather_kernel_size(efconfig)))
+            param_hash = hash((_curve_points_hash(hl), _hue_curve_feather_kernel_size(efconfig)))
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4526,7 +4539,7 @@ class HuevsSatEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash((np.sum(hs), _hue_curve_feather_kernel_size(efconfig)))
+            param_hash = hash((_curve_points_hash(hs), _hue_curve_feather_kernel_size(efconfig)))
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4551,7 +4564,7 @@ class LumvsLumEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(ll))
+            param_hash = _curve_points_hash(ll)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4574,7 +4587,7 @@ class LumvsSatEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(ls))
+            param_hash = _curve_points_hash(ls)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4597,7 +4610,7 @@ class SatvsLumEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(sl))
+            param_hash = _curve_points_hash(sl)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4620,7 +4633,7 @@ class SatvsSatEffect(Effect):
             self.diff = None
             self.hash = None
         else:
-            param_hash = hash(np.sum(ss))
+            param_hash = _curve_points_hash(ss)
             if self.hash != param_hash:
                 self.hash = param_hash
 
@@ -4950,6 +4963,7 @@ class LensSimulatorEffect(Effect):
                     disp,
                 )
             except Exception:
+                # disp/crop情報の取得に失敗しても、以降はNoneのままフォールバック処理される
                 pass
             cx, cy, radial_norm = lens_effect_adapter.optical_geometry(
                 processed.shape,
@@ -5163,7 +5177,8 @@ class LightRaysEffect(Effect):
         for key in self._GUIDE_PARAM_KEYS:
             try:
                 out[key] = float(self._get_param(param, key))
-            except Exception:
+            except (KeyError, TypeError, ValueError):
+                # キー欠落/数値変換不可のキーは out に含めず、呼び出し側のデフォルトに委ねる
                 pass
         return out
 
@@ -5188,7 +5203,8 @@ class LightRaysEffect(Effect):
             if key in guide_params:
                 try:
                     return float(guide_params[key])
-                except Exception:
+                except (TypeError, ValueError):
+                    # 数値変換不可なら次の候補キー/デフォルトへフォールバック
                     pass
         return float(self._get_param(param, 'light_ray_length'))
 
@@ -5259,7 +5275,8 @@ class LightRaysEffect(Effect):
                     try:
                         guide['p2'] = (float(p[0]) + 0.18, float(p[1]))
                         changed = True
-                    except Exception:
+                    except (TypeError, ValueError, IndexError):
+                        # p が未設定/不正な形式なら p2 補完はスキップ
                         pass
         param['light_ray_selected'] = target
         return changed
@@ -5519,6 +5536,7 @@ class LightRaysEffect(Effect):
             if width > 0.0 and height > 0.0:
                 return (width, height)
         except Exception:
+            # disp情報が取得できない/不正な場合は work のサイズにフォールバック
             pass
         return (float(work.shape[1]), float(work.shape[0]))
 

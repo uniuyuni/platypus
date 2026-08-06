@@ -14,7 +14,8 @@ def set_text(tag, text, main_widget=None):
     if _msg_queue is not None:
         try:
             _msg_queue.put({'type': 'waitinfo', 'tag': tag, 'text': text})
-        except:
+        except Exception:
+            # キュークローズ等のレースでのステータス通知失敗は無視（表示更新の一手段に過ぎない）
             pass
         return
 
@@ -27,5 +28,6 @@ def set_text(tag, text, main_widget=None):
             widget.disabled = True
         else:
             widget.disabled = False
-    except:
+    except (KeyError, AttributeError):
+        # 該当ウィジェットが存在しない/未初期化な場合のベストエフォート表示更新
         pass

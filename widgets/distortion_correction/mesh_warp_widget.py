@@ -390,7 +390,7 @@ class MeshWarpWidget(KVFloatLayout):
                     # Better parse "1,2" -> (1,2)
                     parts = k.strip('()').split(',')
                     key = (int(parts[0]), int(parts[1]))
-                except:
+                except (ValueError, IndexError):
                     continue
             else:
                 key = tuple(k)
@@ -527,6 +527,7 @@ class MeshWarpWidget(KVFloatLayout):
                     _device.dpi_scale() if hasattr(_device, 'dpi_scale') else None,
                 )
             except Exception:
+                # 高頻度経路のためログ抑制（デバッグログ自体の失敗でredrawを止めない）
                 pass
 
         self.draw_overlay.canvas.clear()

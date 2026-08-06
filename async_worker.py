@@ -130,7 +130,8 @@ def worker_process(input_queue, result_queue, msg_queue, stop_event, config_dict
                     try:
                         shm = shared_memory.SharedMemory(name=shm_name)
                         shm.close()
-                    except:
+                    except (FileNotFoundError, OSError):
+                        # Main側が既に解放済みならそれで良い（ベストエフォートのクリーンアップ）
                         pass
                     continue
             
@@ -365,7 +366,8 @@ class AsyncWorker:
                         import signal
                         try:
                             os.kill(self.process.pid, signal.SIGKILL)
-                        except:
+                        except OSError:
+                            # プロセスが既に終了している等のレース（ベストエフォートの強制終了）
                             pass
                             
                 self.process = None
@@ -375,7 +377,10 @@ class AsyncWorker:
         try:
             while not self.input_queue.empty():
                 self.input_queue.get_nowait()
-        except:
+        except (Empty, OSError, ValueError):
+            # Empty: empty()判定後にキューが空になるレース
+            # OSError/ValueError: 停止済みプロセスのキューが既に閉じられている場合
+            # （いずれも停止処理のベストエフォートなドレイン）
             pass
             
     def restart(self):
@@ -391,7 +396,8 @@ class AsyncWorker:
             try:
                 shm.close()
                 shm.unlink()
-            except:
+            except (FileNotFoundError, OSError):
+                # 既に close/unlink 済みのSHMのレース（再起動時のベストエフォートな後始末）
                 pass
         self.active_shms.clear()
         self.active_effects.clear()
@@ -461,6 +467,7 @@ class AsyncWorker:
                 shm.close()
                 shm.unlink()
             except Exception:
+                # pickle不可と判明した後の後始末失敗は無視（本エラーは直後にlogging.exceptionで記録）
                 pass
             logging.exception(
                 "AsyncWorker task is not picklable: task_id=%s effect=%s params=%s error=%s",

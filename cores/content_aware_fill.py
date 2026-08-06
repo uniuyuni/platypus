@@ -541,8 +541,8 @@ class PatchMatchInpainting:
         else:
             off = self._multiscale_patchmatch(roi_img_w, roi_mask_w, coarse_init)
 
-        # [PM_DIAG] どの経路を通ったか（low_texture=laplaceのみ / PatchMatch）とROIサイズの一時ログ。
-        logging.warning(
+        # [PM_DIAG] どの経路を通ったか（low_texture=laplaceのみ / PatchMatch）とROIサイズの診断ログ。
+        logging.debug(
             "[PM_DIAG] fill image=%s mask_hole=%d roi=(%d,%d) work=(%d,%d) scale=%.3f "
             "low_texture=%s patchmatch=%s",
             tuple(pkg.image.shape), int(pkg.mask.sum().item()), rh, rw,

@@ -1,4 +1,4 @@
-# もはや使ってない
+# 現役: effects.py / imageset.py / main.py / cores/mask2/hls_mask.py などから import されている
 
 import numpy as np
 from functools import partial

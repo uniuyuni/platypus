@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import cv2
 try:
-    from numba import jit, prange
+    from numba import jit
     HAS_NUMBA = True
 except ImportError:
     HAS_NUMBA = False
@@ -377,7 +377,10 @@ def _find_aspect_rect_jit(heights, aspect_ratio, step):
     best_x1, best_y1, best_x2, best_y2 = 0, 0, 0, 0
     
     # 各行をスキャン（サンプリング）
-    for row_idx in prange(0, h, step):
+    # 本関数は @jit(nopython=True) のみで parallel=True が付いていないため、
+    # prange は実質 range として実行される。max_area 等の共有スカラを書き換える
+    # ボディなので parallel=True を付けると競合するが、そもそも並列化されていない。
+    for row_idx in range(0, h, step):
         # 各開始位置をスキャン
         for start in range(w):
             if heights[row_idx, start] == 0:

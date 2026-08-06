@@ -31,6 +31,7 @@ def current_rss_bytes() -> int | None:
         try:
             return int(psutil.Process(os.getpid()).memory_info().rss)
         except Exception:
+            # psutil側の取得失敗時はresource.getrusageへフォールバック
             pass
     try:
         usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -64,6 +65,7 @@ def available_memory_bytes() -> int | None:
             try:
                 pages += int(value.strip().rstrip(".").replace(".", ""))
             except ValueError:
+                # vm_stat の出力形式が想定外の行は無視して集計を継続
                 pass
         return pages * page_size if pages else None
     try:
@@ -94,7 +96,13 @@ def bytes_of(obj: Any) -> int:
 
 def copy_image_for_cache(image):
     arr = np.asarray(image)
-    return np.ascontiguousarray(arr).copy()
+    contiguous = np.ascontiguousarray(arr)
+    # ascontiguousarray が非連続入力に対して新規配列を作った場合はそれ自体が
+    # 独立コピーなので、二重コピーを避けるため同一オブジェクトの場合のみ .copy() する。
+    # 戻り値が呼び出し元の入力と絶対にエイリアスしない契約は維持する。
+    if contiguous is arr:
+        contiguous = contiguous.copy()
+    return contiguous
 
 
 def format_bytes(num: int | None) -> str:
@@ -162,42 +170,34 @@ def clear_mask2_ai_caches(mask_editor2) -> dict:
     }
 
 
+def _empty_ai_release_result() -> dict:
+    # release_ai_model_runtimes の各失敗パスで返す 0 埋めフォールバック。
+    # 呼び出し側で誤って書き換えられても影響が漏れないよう、共有定数ではなく
+    # 呼び出しごとに新しい dict を返す。
+    return {
+        "sam3_processor_released": 0,
+        "sam3_model_released": 0,
+        "depth_model_released": 0,
+        "face_runtime_released": 0,
+    }
+
+
 def release_ai_model_runtimes() -> dict:
     try:
         from cores.mask2 import inference_runtime
     except Exception:
         logging.exception("memory_manager: failed to import Mask2 inference runtime")
-        return {
-            "sam3_processor_released": 0,
-            "sam3_model_released": 0,
-            "depth_model_released": 0,
-            "face_runtime_released": 0,
-        }
+        return _empty_ai_release_result()
     release = getattr(inference_runtime, "release_ai_model_runtimes", None)
     if release is None:
-        return {
-            "sam3_processor_released": 0,
-            "sam3_model_released": 0,
-            "depth_model_released": 0,
-            "face_runtime_released": 0,
-        }
+        return _empty_ai_release_result()
     try:
         result = release()
     except Exception:
         logging.exception("memory_manager: failed to release AI model runtimes")
-        return {
-            "sam3_processor_released": 0,
-            "sam3_model_released": 0,
-            "depth_model_released": 0,
-            "face_runtime_released": 0,
-        }
+        return _empty_ai_release_result()
     if not isinstance(result, dict):
-        return {
-            "sam3_processor_released": 0,
-            "sam3_model_released": 0,
-            "depth_model_released": 0,
-            "face_runtime_released": 0,
-        }
+        return _empty_ai_release_result()
     return {
         "sam3_processor_released": int(result.get("sam3_processor_released", 0) or 0),
         "sam3_model_released": int(result.get("sam3_model_released", 0) or 0),

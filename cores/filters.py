@@ -233,17 +233,17 @@ def fast_median_filter(img, kernel_size=3, num_bins=1024):
     # 出力画像初期化
     result = np.zeros((h, w), dtype=np.float32)
     
-    # メイン処理 (並列化)
+    # メイン処理 (行単位で並列化。y方向は各行が独立した hist を持つため prange で安全)
     for y in prange(h):
         hist = np.zeros(num_bins, dtype=np.uint16)
-        # 初期ヒストグラム構築
-        for ky in prange(kernel_size):
-            for kx in prange(kernel_size):
+        # 初期ヒストグラム構築（同一 hist への += の積み上げなので range で逐次実行）
+        for ky in range(kernel_size):
+            for kx in range(kernel_size):
                 val = padded[y + ky, kx]
                 hist[int(val)] += 1
-        
-        # 行方向にスライディング
-        for x in prange(w):
+
+        # 行方向にスライディング（hist を左右にずらしながら更新するため x は逐次依存。range で実行）
+        for x in range(w):
             # 中央値計算
             cumsum = 0
             for b in range(num_bins):
@@ -251,10 +251,10 @@ def fast_median_filter(img, kernel_size=3, num_bins=1024):
                 if cumsum > median_index:
                     result[y, x] = min_val + b / scale
                     break
-            
-            # ヒストグラム更新 (左カラム削除/右カラム追加)
+
+            # ヒストグラム更新 (左カラム削除/右カラム追加、同じ hist を書き換えるため range で実行)
             if x < w - 1:
-                for ky in prange(kernel_size):
+                for ky in range(kernel_size):
                     # 左カラム削除
                     left_val = padded[y + ky, x]
                     hist[int(left_val)] -= 1

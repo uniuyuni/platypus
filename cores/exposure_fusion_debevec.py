@@ -25,9 +25,9 @@ def exposure_fusion_debevec(img, out_ldr=False):
         return img * (2.0 ** ev)
 
     images = [
-        simulate_ev(img, -2.0),
-        simulate_ev(img,  0.0),
-        simulate_ev(img,  2.0)
+        _to_merge_input(simulate_ev(img, -2.0)),
+        _to_merge_input(simulate_ev(img,  0.0)),
+        _to_merge_input(simulate_ev(img,  2.0))
     ]
     
     # 3. 【重要】露出時間の「相対比率のみ」を反映（絶対値は1.0に正規化）

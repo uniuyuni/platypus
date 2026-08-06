@@ -40,6 +40,7 @@ def _make_temp_output_path(final_path):
     try:
         os.remove(tmp_path)
     except FileNotFoundError:
+        # 既に存在しない場合はファイル名だけ確保できていれば十分（ベストエフォート）
         pass
     return tmp_path
 
@@ -50,6 +51,7 @@ def _cleanup_temp_output(path):
     try:
         os.remove(path)
     except FileNotFoundError:
+        # 既に削除済みなら何もしなくてよい（ベストエフォートな後始末）
         pass
     except OSError:
         logging.exception("failed to remove temporary export file: %s", path)
@@ -661,8 +663,8 @@ class ExportFile():
             vips_image.set_type(pyvips.GValue.gstr_type, 'exif-ifd0-InterColorProfile', self.icc_profile)
             vips_image.set_type(pyvips.GValue.gint_type, 'exif-ifd0-ColorSpace', 0xfffe)
 
-        except:
-            logging.warning(f"ICC profile {self.icc_profile} not found")
+        except Exception as e:
+            logging.warning(f"ICC profile {self.icc_profile} load failed: {e}")
 
         # ファイル書き込み
         if _export_cancel_requested(cancel_event):

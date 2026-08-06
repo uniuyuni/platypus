@@ -458,6 +458,7 @@ class ThumbnailCard(RecycleDataViewBehavior, PlainCard):
         try:
             image_w, image_h = self.image.norm_image_size
         except (TypeError, ValueError):
+            # 高頻度経路のためログ抑制（スクロール中のレイアウト更新で頻発しうる）
             image_w, image_h = self.image_box.size
         if image_w <= 0 or image_h <= 0:
             image_w, image_h = self.image_box.size
@@ -617,6 +618,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
             try:
                 stack.extend(widget.children)
             except Exception:
+                # 高頻度経路のためログ抑制（マウスホバー判定で頻繁に呼ばれる）
                 pass
 
     def hover_index_at_window_pos(self, pos):
@@ -626,6 +628,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
         try:
             index = int(getattr(card, "index", -1))
         except (TypeError, ValueError):
+            # 高頻度経路のためログ抑制
             return None
         if 0 <= index < len(self.data):
             return index
@@ -736,7 +739,8 @@ class ViewerWidget(RecycleView, DraggableWidget):
                         break
                     self._dispatch_changes(changes)
             except Exception:
-                pass
+                # 失敗するとファイル変更検知が停止し一覧が古いままになり得るため記録する
+                logging.exception("watchfiles: watch loop failed for %s", watch_directory)
             time.sleep(1)
 
     def _dispatch_changes(self, changes):
@@ -846,7 +850,8 @@ class ViewerWidget(RecycleView, DraggableWidget):
         try:
             self._all_items.remove(item)
         except ValueError:
-            pass
+            # _all_items に見つからないと一覧に古いアイテムが残り得るため記録する
+            logging.exception("_remove_item: item not found in _all_items for %s", file_path)
         self.selected_paths.discard(key)
         if self._last_selected_path == key:
             self._last_selected_path = None
@@ -1014,6 +1019,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
         try:
             return os.path.normcase(os.path.abspath(p))
         except OSError:
+            # 高頻度経路のためログ抑制（一覧再構築時に大量呼び出しされるパス正規化）
             return os.path.normcase(p or "")
 
     def _process_metadata_chunk(self, chunk, deferred_raw, deferred_lock):
@@ -1228,6 +1234,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
                             output_bps=8, half_size=True,
                         )
                     except TypeError:
+                        # half_size 非対応のlibrawビルドへのフォールバック（既知の互換シム）
                         thumb = raw.postprocess(
                             demosaic_algorithm=lre.DemosaicAlgorithm.Linear, output_bps=8,
                         )
@@ -1308,6 +1315,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
             try:
                 return self._decode_embedded_preview(encoded), key
             except Exception:
+                # このキーのプレビューが壊れている等の場合は次候補キーへフォールバック
                 continue
 
         for key in _EMBEDDED_THUMBNAIL_KEYS:
@@ -1317,6 +1325,7 @@ class ViewerWidget(RecycleView, DraggableWidget):
             try:
                 thumb = self._decode_embedded_thumbnail_image(encoded)
             except Exception:
+                # このキーのサムネイルが壊れている等の場合は次候補キーへフォールバック
                 continue
             if thumb is None:
                 continue

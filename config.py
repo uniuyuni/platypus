@@ -1,6 +1,7 @@
 
 import os
 import json
+import logging
 import multiprocessing
 
 from utils import paths
@@ -129,5 +130,7 @@ def load_config():
             min_size = get_preview_min_size()
             set_preview_texture_size(min_size, min_size)
             apply_config()
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         pass
+    except json.JSONDecodeError as e:
+        logging.warning(f"設定ファイルの読み込みに失敗しました（不正な JSON）。デフォルト設定で続行します: {file_path} ({e})")

@@ -200,7 +200,13 @@ class CropEditor(KVBoxLayout):
         scaled_width = self.input_width * self.scale
         scaled_height = self.input_height * self.scale
         scaled_max = max(scaled_width, scaled_height)
-        wx, wy = self.to_window(*self.parent.pos) # 親座標じゃないとX方向にズレる（バグ？）
+        # CropEditor は preview_widget(FloatLayout) に pos_hint なしで add_widget される。
+        # FloatLayout は pos_hint の無い子の pos を動かさないため self.pos は (0,0) の
+        # まま(size だけは size_hint=(1,1) で親に追従する)。そのため描画原点には
+        # self.pos ではなく親(preview_widget)の pos を使うのが正しい。self.pos を使うと
+        # 左ペイン分の X オフセットがまるごと失われてズレる。祖先に RelativeLayout 系は
+        # 無いので to_window は実質恒等変換(将来の階層変更に備えて防御的に通している)。
+        wx, wy = self.to_window(*self.parent.pos)
         self.translate.x = wx + (self.width - scaled_max) / 2
         self.translate.y = wy + (self.height - scaled_max) / 2
         self.input_translate.x = scaled_max / 2

@@ -42,6 +42,11 @@ class _StubMaskEditor:
         self.added_masks = []
         self.cleared = 0
         self.canvas_updates = 0
+        self.released = 0
+
+    def release(self):
+        # 実装側は破棄時に Window.mouse_pos の unbind として呼ぶ
+        self.released += 1
 
     def clear_mask(self):
         self.added_masks = []

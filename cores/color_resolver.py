@@ -5,7 +5,6 @@ import re
 import colorsys
 import os
 import atexit
-import sys
 import logging
 import webcolors
 from difflib import get_close_matches
@@ -28,10 +27,10 @@ try:
     RAW = json.loads(text)
 except FileNotFoundError:
     logging.error("色辞書ファイルが見つかりません: %s", DATA_PATH)
-    sys.exit(1)
+    raise
 except json.JSONDecodeError as e:
     logging.error("JSONのパース失敗: %s", e)
-    sys.exit(1)
+    raise RuntimeError(f"色辞書ファイルのパースに失敗しました: {DATA_PATH}") from e
 
 
 def _norm(t):
