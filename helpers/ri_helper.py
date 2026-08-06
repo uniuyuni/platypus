@@ -13,15 +13,15 @@ if _RI_PROJECT not in sys.path:
 
 from nagi_inpaint import api as _api
 
-# 重みは ShadeWave の慣習に合わせて ./checkpoints/ 配下（環境変数で上書き可）
-_CKPT = os.environ.get("RI_CKPT", "./checkpoints/nagi_inpaint/latest.pt")
-_REFINER_CKPT = os.environ.get("RI_REFINER_CKPT", "./checkpoints/nagi_inpaint/refiner.pt")
+# 構造モデルは big-lama（Apache-2.0）。重みは ShadeWave の慣習に合わせて
+# ./checkpoints/ 配下（環境変数で上書き可）。RI_CKPT を自作ベースの ckpt に
+# 向ければフォールバック（RI_STRUCTURE_MODEL=base 相当）も使える。
+_CKPT = os.environ.get("RI_CKPT", "./checkpoints/big-lama.pt")
 
 
 def setup(device="mps"):
     logging.info(f"nagi_inpaint ({_CKPT}) をロード中...")
-    refiner = _REFINER_CKPT if os.path.exists(_REFINER_CKPT) else None
-    pipeline, device = _api.setup(device=device, ckpt=_CKPT, refiner_ckpt=refiner)
+    pipeline, device = _api.setup(device=device, ckpt=_CKPT)
     return (pipeline, device)
 
 

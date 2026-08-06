@@ -114,6 +114,20 @@ are redistributed.
 - `external/demosaicnet_torch`: research implementation; verify upstream
   license and model-weight terms before redistribution.
 
+## LaMa (big-lama)
+
+The `helpers/ri_helper.py` inpainting / object-eraser path uses the **big-lama**
+model as its structure model, loaded from `./checkpoints/big-lama.pt`
+(TorchScript weights). LaMa ("Resolution-robust Large Mask Inpainting with
+Fourier Convolutions", Suvorov et al.) is published by advimman/lama under the
+**Apache License 2.0**. The model weights and the LaMa source carry their own
+Apache-2.0 terms; include them when redistributing the weights or a packaged
+build that bundles them. Upstream: https://github.com/advimman/lama
+
+The surrounding inference framework (40MP tiling, HDR tone mapping, harmonic
+tone correction, PatchMatch texture, ShadeWave integration) is the sibling
+`nagi_inpaint` project and is not part of big-lama.
+
 ## Packaging Notes
 
 The macOS `.app` bundle can include dynamic libraries from the pixi/conda
