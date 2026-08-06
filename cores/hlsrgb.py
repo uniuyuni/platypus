@@ -7,6 +7,13 @@ import time
 
 from threads import lock_numba
 
+# 同ファイルの rgb_to_hlc_gain / hlc_gain_to_rgb と異なり @lock_numba を意図的に外している。
+# threads.lock_numba はコンパイル時だけでなく呼び出しの実行区間全体を numba_lock
+# （プロセス全体で共有の非再入 Lock）で直列化する実装のため、付けるとコンパイル時保護に
+# とどまらず、アプリ内の他の @lock_numba 対象すべてと実行時の排他が発生するようになる
+# （現状の唯一の呼び出し元 dehaze_reference._estimate_depth_map は他の lock_numba 区間の
+# 内側からは呼ばれていないため付けてもデッドロックはしないが、実行時の並行性という
+# 挙動そのものを変えてしまうため、低優先度クリーンアップの範囲としては見送った）。
 @njit(parallel=True)
 def rgb2hls(img):
     """
@@ -28,7 +35,7 @@ def rgb2hls(img):
     out = np.empty((rows, cols, 4), dtype=img.dtype)
     
     for i in prange(rows):
-        for j in prange(cols):
+        for j in range(cols):
             r = img[i, j, 0]
             g = img[i, j, 1]
             b = img[i, j, 2]
@@ -62,13 +69,8 @@ def rgb2hls(img):
             delta = max_val - min_val
             
             # Saturation Damping (epsilon)
+            # HDR時にepsilonをスケールする案を検討したが、結局rawベースの計算のまま据え置いた。
             damp_epsilon = 0.005
-            if gain > 1.0: 
-                 # Adjust epsilon for HDR scale? 
-                 # If value is 10, epsilon 0.003 is tiny.
-                 # But we are calculating S based on raw values here.
-                 # Actually, let's stick to raw calculation.
-                 pass
 
             if max_val <= 1e-9:
                 s = 0.0
@@ -102,11 +104,21 @@ KG = 0.7152
 KB = 0.0722
 
 # 彩度ガンマ外のソフトクリップ閾値（対 C_max 比）。
-# 彩度ブースト等で Chroma が gamut(正規化RGB∈[0,1])を超えると、逆変換後のRGBが負/過大になり、
+# 彩度ブースト等で Chroma が gamut を超えると、逆変換後のRGBが負/過大になり、
 # 後段のチャンネル単位クリップで色相がずれる。これを防ぐため、色相(H)と輝度(L)を保ったまま
 # Chroma だけを C_max 以下に滑らかに圧縮する。この値を 1.0 にするとハードクリップ相当（既存色
 # 不変だが折れ点）、小さくするほど手前から緩やかに丸める（ごく高彩度の既存色がわずかに低下）。
 GAMUT_SOFTCLIP_KNEE = 0.95
+
+# C_max を求めるときの「正規化チャンネルの上限」。
+# rgb_to_hlc_gain は RGB を gain=max(R,G,B) で割るため、正規化空間では必ずどれかの
+# チャンネルが 1.0 ちょうどになる = 全ピクセルが常に gamut 境界上にある。よってここを
+# 1.0 にすると C == C_max となり、ソフトクリップ（ratio→∞ でも上限 1.0）に阻まれて
+# 彩度のプラス方向が一切効かなくなるうえ、無操作の往復でも彩度が約1.7%失われる。
+# HDR ヘッドルームを持つパイプラインなので、正規化チャンネルが 1.0 を超えること自体は
+# 許容し（= 元の最大チャンネルより明るくなってよい）、C = C_norm * 1.5 のスケールに
+# 合わせて 1.5 を上限とする。負値側の制約（-L/k）は色相ズレを防ぐため従来どおり維持する。
+GAMUT_NORM_CEILING = 1.5
 
 @lock_numba
 @njit("f4[:,:,:](f4[:,:,:])", parallel=True, fastmath=True)
@@ -130,7 +142,7 @@ def rgb_to_hlc_gain(rgb):
     H_img, W = rgb.shape[0], rgb.shape[1]
     hlcg = np.empty((H_img, W, 4), dtype=np.float32)
     
-    for i in prange(H_img): # なぜかクラッシュするからprangeが使えない
+    for i in prange(H_img):  # 外側(i)はprangeで並列化。内側(j)はprangeにするとなぜかクラッシュするためrangeを使用
         for j in range(W):
             r, g, b = rgb[i, j, 0], rgb[i, j, 1], rgb[i, j, 2]
             
@@ -219,27 +231,28 @@ def hlc_gain_to_rgb(hlcg):
             cosH = np.cos(H_rad)
             sinH = np.sin(H_rad)
 
-            # 色相(H)・輝度(L)を保ったまま正規化RGB(L + C*k)が[0,1]に収まる最大Chroma C_max を求め、
-            # それを超える分だけ滑らかに圧縮する（負RGB/過大値→チャンネル単位クリップによる色相シフトを防ぐ）。
+            # 色相(H)・輝度(L)を保ったまま正規化RGB(L + C*k)が[0, GAMUT_NORM_CEILING]に収まる
+            # 最大Chroma C_max を求め、それを超える分だけ滑らかに圧縮する
+            # （負RGB→チャンネル単位クリップによる色相シフトを防ぐ）。
             #   r_norm = L + C*sinH, b_norm = L + C*cosH, g_norm = L + C*kg
             kr = sinH
             kb = cosH
             kg = -(KR / KG) * sinH - (KB / KG) * cosH
             C_max = 1.0e30
             if kr > 1e-6:
-                lim = (1.0 - L) / kr
+                lim = (GAMUT_NORM_CEILING - L) / kr
                 if lim < C_max: C_max = lim
             elif kr < -1e-6:
                 lim = -L / kr
                 if lim < C_max: C_max = lim
             if kb > 1e-6:
-                lim = (1.0 - L) / kb
+                lim = (GAMUT_NORM_CEILING - L) / kb
                 if lim < C_max: C_max = lim
             elif kb < -1e-6:
                 lim = -L / kb
                 if lim < C_max: C_max = lim
             if kg > 1e-6:
-                lim = (1.0 - L) / kg
+                lim = (GAMUT_NORM_CEILING - L) / kg
                 if lim < C_max: C_max = lim
             elif kg < -1e-6:
                 lim = -L / kg
