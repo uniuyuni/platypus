@@ -631,6 +631,10 @@ static inline float cubic_weight(float x) {
     return 0.0f;
 }
 
+// mesh_map は絶対座標ではなくキャンバス座標からの「変位」を保持する。
+// 絶対座標 (= ほぼ線形ランプ) を bicubic 拡大すると Keys(a=-0.75) が 1 次多項式を
+// 再現できないため、変形していない領域まで coarse セル周期で波打つ。変位なら
+// 0 の領域は厳密に 0 のまま。呼び出し側が自分のキャンバス座標へ足す。
 static inline float sample_mesh_map_cubic(
     const device float* mesh_map,
     constant TransformCropToCanvasParams& p,
@@ -701,10 +705,10 @@ static inline float3 sample_transform_crop_at_canvas_point(
     float ty
 ) {
     if (p.mesh_enabled) {
-        float mapped_tx = sample_mesh_map_cubic(mesh_map_x, p, tx, ty);
-        float mapped_ty = sample_mesh_map_cubic(mesh_map_y, p, tx, ty);
-        tx = mapped_tx;
-        ty = mapped_ty;
+        float disp_tx = sample_mesh_map_cubic(mesh_map_x, p, tx, ty);
+        float disp_ty = sample_mesh_map_cubic(mesh_map_y, p, tx, ty);
+        tx += disp_tx;
+        ty += disp_ty;
     }
     return sample_transform_crop_project(input, p, tx, ty);
 }
@@ -713,6 +717,7 @@ static inline float3 sample_transform_crop_at_canvas_point(
 // 同一式（重み・clamp 済みインデックスを C++ 側で事前計算）になるため、
 // area/nearest 経路の出力は従来と float 丸め誤差内で一致する。
 // x/y 両マップで重みを共有し、旧実装の 2×(16 cubic_weight + 除算) をタップ毎に削減。
+// 返り値は sample_mesh_map_cubic と同じく「変位」。
 static inline float2 mesh_lut_lookup(
     const device float* mesh_map_x,
     const device float* mesh_map_y,
@@ -755,9 +760,9 @@ static inline float3 sample_transform_crop_at_lut_point(
     float tx = float(txi);
     float ty = float(tyi);
     if (p.mesh_enabled) {
-        float2 mapped = mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[txi], mesh_lut_y[tyi]);
-        tx = mapped.x;
-        ty = mapped.y;
+        float2 disp = mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[txi], mesh_lut_y[tyi]);
+        tx += disp.x;
+        ty += disp.y;
     }
     return sample_transform_crop_project(input, p, tx, ty);
 }
@@ -814,8 +819,8 @@ static inline float3 sample_transform_crop_area_rgb(
                 float2 mapped = mesh_dense[dense_row + xx];
                 value = sample_transform_crop_project(input, p, mapped.x, mapped.y);
             } else if (use_lut) {
-                float2 mapped = mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[xx], ey);
-                value = sample_transform_crop_project(input, p, mapped.x, mapped.y);
+                float2 disp = mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[xx], ey);
+                value = sample_transform_crop_project(input, p, float(xx) + disp.x, float(yy) + disp.y);
             } else {
                 value = sample_transform_crop_at_canvas_point(input, p, mesh_map_x, mesh_map_y, float(xx), float(yy));
             }
@@ -846,8 +851,10 @@ kernel void bake_mesh_dense_kernel(
     }
     int tx = p.source_x + rx;
     int ty = p.source_y + ry;
+    // dense には変位ではなく絶対座標を bake する（消費側はそのまま project する）。
     dense[ry * p.source_width + rx] =
-        mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[tx], mesh_lut_y[ty]);
+        float2(float(tx), float(ty))
+        + mesh_lut_lookup(mesh_map_x, mesh_map_y, p, mesh_lut_x[tx], mesh_lut_y[ty]);
 }
 
 kernel void transform_crop_to_canvas_kernel(

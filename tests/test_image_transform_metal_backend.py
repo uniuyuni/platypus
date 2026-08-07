@@ -361,9 +361,10 @@ class ImageTransformMetalBackendTest(unittest.TestCase):
             grid_w, grid_h = 5, 4
             coarse_x = np.linspace(0, tw - 1, grid_w, dtype=np.float32)
             coarse_y = np.linspace(0, th - 1, grid_h, dtype=np.float32)
-            mesh_x, mesh_y = np.meshgrid(coarse_x, coarse_y)
-            mesh_x = (mesh_x + 3.0 * np.sin(mesh_y / (th - 1) * np.pi)).astype(np.float32)
-            mesh_y = (mesh_y + 2.0 * np.sin(mesh_x / (tw - 1) * np.pi)).astype(np.float32)
+            base_x, base_y = np.meshgrid(coarse_x, coarse_y)
+            # mesh_map_* はキャンバス座標からの「変位」
+            mesh_x = (3.0 * np.sin(base_y / (th - 1) * np.pi)).astype(np.float32)
+            mesh_y = (2.0 * np.sin(base_x / (tw - 1) * np.pi)).astype(np.float32)
 
             def cubic_w(x):
                 a = -0.75
@@ -410,8 +411,8 @@ class ImageTransformMetalBackendTest(unittest.TestCase):
                 return top * (1 - ay) + bot * ay
 
             def tap(txi, tyi):
-                mtx = mesh_cubic(mesh_x, float(txi), float(tyi))
-                mty = mesh_cubic(mesh_y, float(txi), float(tyi))
+                mtx = float(txi) + mesh_cubic(mesh_x, float(txi), float(tyi))
+                mty = float(tyi) + mesh_cubic(mesh_y, float(txi), float(tyi))
                 return bilinear_const(image, mtx, mty)
 
             dw, dh = 60, 40  # 2x 縮小 → area の footprint は 2x2 タップ
@@ -498,9 +499,10 @@ class ImageTransformMetalBackendTest(unittest.TestCase):
             grid_w, grid_h = 6, 5
             coarse_x = np.linspace(0, tw - 1, grid_w, dtype=np.float32)
             coarse_y = np.linspace(0, th - 1, grid_h, dtype=np.float32)
-            mesh_x, mesh_y = np.meshgrid(coarse_x, coarse_y)
-            mesh_x = (mesh_x + 2.5 * np.sin(mesh_y / (th - 1) * np.pi)).astype(np.float32)
-            mesh_y = (mesh_y + 1.5 * np.sin(mesh_x / (tw - 1) * np.pi)).astype(np.float32)
+            base_x, base_y = np.meshgrid(coarse_x, coarse_y)
+            # mesh_map_* はキャンバス座標からの「変位」
+            mesh_x = (2.5 * np.sin(base_y / (th - 1) * np.pi)).astype(np.float32)
+            mesh_y = (1.5 * np.sin(base_x / (tw - 1) * np.pi)).astype(np.float32)
             common = dict(
                 matrix=np.eye(3, dtype=np.float64),
                 source_rect=(8, 4, 112, 88),
@@ -561,9 +563,10 @@ class ImageTransformMetalBackendTest(unittest.TestCase):
             grid_h = 4
             coarse_x = np.linspace(0, 119, grid_w, dtype=np.float32)
             coarse_y = np.linspace(0, 79, grid_h, dtype=np.float32)
-            mesh_x, mesh_y = np.meshgrid(coarse_x, coarse_y)
-            mesh_x = (mesh_x + 3.0 * np.sin(mesh_y / 79.0 * np.pi)).astype(np.float32)
-            mesh_y = (mesh_y + 2.0 * np.sin(mesh_x / 119.0 * np.pi)).astype(np.float32)
+            base_x, base_y = np.meshgrid(coarse_x, coarse_y)
+            # mesh_map_* はキャンバス座標からの「変位」
+            mesh_x = (3.0 * np.sin(base_y / 79.0 * np.pi)).astype(np.float32)
+            mesh_y = (2.0 * np.sin(base_x / 119.0 * np.pi)).astype(np.float32)
             kwargs = dict(
                 matrix=np.eye(3, dtype=np.float64),
                 source_rect=(0, 0, 120, 80),

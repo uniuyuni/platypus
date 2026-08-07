@@ -18,7 +18,7 @@ from scipy.interpolate import Rbf
 
 import effects
 from cores.distortion_correction.warp_correction import (
-    outer_ring_pins_tcg, build_rbf_kwargs, _mls_affine_map,
+    outer_ring_pins_tcg, build_rbf_kwargs, coarse_axis_coords, _mls_affine_map,
 )
 
 _WARP_MAP_CACHE_MAX = 32
@@ -223,22 +223,24 @@ def warp_mask_tps(composit, mesh_size, cps, orig_img_size,
     rbf_kw = build_rbf_kwargs(orig_img_size, mesh_size)
     fn = rbf_kw.get('function', 'thin_plate')
     coarse_dim = int(round(image_dim))
+    # サンプル位置は coarse map を読む側 (cv2.remap / cv2.resize の half-pixel 規約)
+    # と厳密に一致させる。画像 mesh 側と同じ coarse_axis_coords を使う。
     if Adisp is not None:
         grid_w = max(2, int((coarse_dim + grid_step - 1) // grid_step))
         grid_h = max(2, int((coarse_dim + grid_step - 1) // grid_step))
-        coarse_x_coords = np.linspace(0, coarse_dim - 1, grid_w)
-        coarse_y_coords = np.linspace(0, coarse_dim - 1, grid_h)
+        coarse_x_coords = coarse_axis_coords(coarse_dim, grid_w)
+        coarse_y_coords = coarse_axis_coords(coarse_dim, grid_h)
         cnx, cny = np.meshgrid(coarse_x_coords, coarse_y_coords)
     else:
         grid_w = max(2, int((w + grid_step - 1) // grid_step))
         grid_h = max(2, int((h + grid_step - 1) // grid_step))
-        coarse_x_coords = np.linspace(0, w - 1, grid_w)
-        coarse_y_coords = np.linspace(0, h - 1, grid_h)
+        coarse_x_coords = coarse_axis_coords(w, grid_w)
+        coarse_y_coords = coarse_axis_coords(h, grid_h)
         tex_gx, tex_gy = np.meshgrid(coarse_x_coords, coarse_y_coords)
         cnx, cny = _grid_to_model(tex_gx, tex_gy)   # model 空間の query 点
 
     coarse_cache_key = (
-        "coarse_model",
+        "coarse_model_disp",
         (coarse_dim, coarse_dim) if Adisp is not None else (w, h),
         tuple(mesh_size),
         tuple(orig_img_size),
@@ -261,9 +263,13 @@ def warp_mask_tps(composit, mesh_size, cps, orig_img_size,
         cache_hit = True
     else:
         cache_hit = False
+        # coarse map は絶対座標ではなく model 空間の **変位** で持つ。絶対座標を
+        # bicubic (Keys a=-0.75) で拡大すると 1 次多項式が再現されず、ほぼ identity な
+        # map 全体に coarse セル周期の波が乗り、変形していない領域まで歪む
+        # (画像 mesh 側 upsample_coarse_mesh_map と同じ理由)。
         cached_coarse = _get_cached_maps(coarse_cache_key)
         if cached_coarse is not None:
-            sx_model, sy_model = cached_coarse
+            dx_model, dy_model = cached_coarse
         else:
             if fn == 'mls':
                 # MLS affine (フル画像 px の安定空間で解く → fold しない)
@@ -277,7 +283,9 @@ def warp_mask_tps(composit, mesh_size, cps, orig_img_size,
                     return composit
                 sx_model = rbf_x(cnx.ravel(), cny.ravel()).reshape(grid_h, grid_w)
                 sy_model = rbf_y(cnx.ravel(), cny.ravel()).reshape(grid_h, grid_w)
-            _put_cached_maps(coarse_cache_key, (sx_model.astype(np.float32), sy_model.astype(np.float32)))
+            dx_model = (sx_model - cnx).astype(np.float32)
+            dy_model = (sy_model - cny).astype(np.float32)
+            _put_cached_maps(coarse_cache_key, (dx_model, dy_model))
 
         if Adisp is not None:
             out_x, out_y = np.meshgrid(
@@ -290,21 +298,21 @@ def warp_mask_tps(composit, mesh_size, cps, orig_img_size,
             sample_x = ((full_x + 0.5) * (grid_w / float(coarse_dim)) - 0.5).astype(np.float32)
             sample_y = ((full_y + 0.5) * (grid_h / float(coarse_dim)) - 0.5).astype(np.float32)
             src_model_x = cv2.remap(
-                sx_model.astype(np.float32), sample_x, sample_y,
+                dx_model, sample_x, sample_y,
                 cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE,
-            )
+            ) + full_x
             src_model_y = cv2.remap(
-                sy_model.astype(np.float32), sample_x, sample_y,
+                dy_model, sample_x, sample_y,
                 cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE,
-            )
+            ) + full_y
             map_x, map_y = _model_to_tex(src_model_x, src_model_y)
         else:
-            # MLS の出力 (model 空間の source 座標) を texture px へ戻す (アフィン共役の最後段)
-            map_x_coarse, map_y_coarse = _model_to_tex(sx_model, sy_model)
-
-            # map は既に composit(texture) px。INTER_CUBIC でフル composit 解像度へ拡大。
-            map_x = cv2.resize(map_x_coarse.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
-            map_y = cv2.resize(map_y_coarse.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
+            # フォールバックでは model == texture 空間 (_grid_to_model / _model_to_tex は
+            # 恒等) なので、変位をそのまま texture 解像度へ拡大して座標を足し戻す。
+            map_x = cv2.resize(dx_model, (w, h), interpolation=cv2.INTER_CUBIC)
+            map_y = cv2.resize(dy_model, (w, h), interpolation=cv2.INTER_CUBIC)
+            map_x = map_x + np.arange(w, dtype=np.float32)[None, :]
+            map_y = map_y + np.arange(h, dtype=np.float32)[:, None]
         map_x = np.asarray(map_x, dtype=np.float32)
         map_y = np.asarray(map_y, dtype=np.float32)
         _put_cached_maps(final_cache_key, (map_x, map_y))

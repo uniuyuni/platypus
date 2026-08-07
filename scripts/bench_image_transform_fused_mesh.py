@@ -110,8 +110,11 @@ def main():
             interpolation="linear",
             border_mode="constant",
         )
+        # mesh_map_* は変位なので拡大後に identity を足し戻す（fused 側と同じ扱い）。
         full_map_x = cv2.resize(mesh_map_x, (size, size), interpolation=cv2.INTER_CUBIC)
         full_map_y = cv2.resize(mesh_map_y, (size, size), interpolation=cv2.INTER_CUBIC)
+        full_map_x += np.arange(size, dtype=np.float32)[None, :]
+        full_map_y += np.arange(size, dtype=np.float32)[:, None]
         meshed = cv2.remap(
             transformed,
             full_map_x,

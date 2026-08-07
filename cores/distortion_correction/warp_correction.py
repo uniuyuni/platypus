@@ -74,6 +74,37 @@ def _mls_affine_map(src_px, dst_px, coarse_x_mesh, coarse_y_mesh, alpha=2.0):
     return map_x, map_y
 
 
+def coarse_axis_coords(length, count):
+    """coarse map の 1 軸ぶんのサンプル位置を返す。
+
+    coarse map を full 解像度へ拡大するのは cv2.resize (CPU) と Metal shader だが、
+    どちらも「配列 index j は画素中心 (j+0.5)*length/count - 0.5 にある」という
+    half-pixel 規約で読む。生成側が linspace(0, length-1, count) でサンプルすると
+    規約がずれ、map 全体に線形の誤差 (grid_step=32 で ±16px、64 で ±33px) が乗って
+    画像がわずかに拡大・平行移動する。読み手と同じ位置でサンプルする。
+    """
+    return (np.arange(int(count), dtype=np.float64) + 0.5) * (float(length) / int(count)) - 0.5
+
+
+def upsample_coarse_mesh_map(disp_x_coarse, disp_y_coarse, width, height):
+    """coarse な **変位** マップを full 解像度の絶対座標 map へ拡大する。
+
+    絶対座標の map をそのまま cv2.resize すると全体が波打つ。cv2 の INTER_CUBIC
+    (Keys, a=-0.75) は 1 次多項式を再現できず (重み和は 1 だが 1 次モーメントが
+    ずれる)、ほぼ identity = 線形ランプである map に coarse セル周期・振幅
+    ±0.047*grid_step px の波を注入するため。変形していない領域の直線まで
+    波打つのはこれが原因。
+
+    変位 (map - 座標) を拡大して identity を足し戻せば、変位 0 の領域は厳密に 0 の
+    ままになり、残る誤差も変位の勾配に比例するだけになる。
+    """
+    dx = cv2.resize(np.asarray(disp_x_coarse, dtype=np.float32), (width, height), interpolation=cv2.INTER_CUBIC)
+    dy = cv2.resize(np.asarray(disp_y_coarse, dtype=np.float32), (width, height), interpolation=cv2.INTER_CUBIC)
+    dx += np.arange(width, dtype=np.float32)[None, :]
+    dy += np.arange(height, dtype=np.float32)[:, None]
+    return dx, dy
+
+
 def build_rbf_kwargs(orig_img_size, mesh_size):
     """config.json の mesh_rbf_function に従って scipy.interpolate.Rbf の引数を作る。
     画像 mesh / マスク mesh 両方から呼ばれて同じ kwargs を返すので、両者は常に
@@ -202,8 +233,8 @@ def warp_mesh_with_mapper(
     grid_step = 32
     grid_h = (height + grid_step - 1) // grid_step
     grid_w = (width + grid_step - 1) // grid_step
-    coarse_x_coords = np.linspace(0, width - 1, grid_w)
-    coarse_y_coords = np.linspace(0, height - 1, grid_h)
+    coarse_x_coords = coarse_axis_coords(width, grid_w)
+    coarse_y_coords = coarse_axis_coords(height, grid_h)
     coarse_x_mesh, coarse_y_mesh = np.meshgrid(coarse_x_coords, coarse_y_coords)
 
     rbf_kw = build_rbf_kwargs(orig_img_size, mesh_size)
@@ -228,10 +259,13 @@ def warp_mesh_with_mapper(
         map_x_coarse = rbf_x(flat_cx, flat_cy).reshape(grid_h, grid_w)
         map_y_coarse = rbf_y(flat_cx, flat_cy).reshape(grid_h, grid_w)
 
-    # 6. マップのアップスケーリング
-    # float32でリサイズ
-    map_x = cv2.resize(map_x_coarse.astype(np.float32), (width, height), interpolation=cv2.INTER_CUBIC)
-    map_y = cv2.resize(map_y_coarse.astype(np.float32), (width, height), interpolation=cv2.INTER_CUBIC)
+    # 6. マップのアップスケーリング（変位を拡大して identity を足し戻す）
+    map_x, map_y = upsample_coarse_mesh_map(
+        map_x_coarse - coarse_x_mesh,
+        map_y_coarse - coarse_y_mesh,
+        width,
+        height,
+    )
 
     # [MESH_DEBUG] map の統計 (warp 量を測る、マスク mesh の同等 log と比較するため)
     import os as _os, logging as _logging
@@ -321,6 +355,11 @@ def calculate_mesh_mls_coarse_map(
 
     `warp_mesh()` のMLS branchと同じ src/dst 制御点を使い、画像本体をremapせずに
     coarse mapだけを返す。GPU fused previewではこのmapをsampleして中間画像生成を避ける。
+
+    返すのは絶対座標ではなく **変位** (map - キャンバス座標)。消費側 (Metal shader /
+    image_transform_reference) は bicubic で拡大した値を自身のキャンバス座標へ足す。
+    絶対座標を bicubic 拡大すると画像全体が波打つため（`upsample_coarse_mesh_map`
+    の説明を参照）。
     """
     rows, cols = mesh_size
     image_shape = (height, width)
@@ -360,11 +399,13 @@ def calculate_mesh_mls_coarse_map(
     grid_step = max(1, int(grid_step))
     grid_h = (height + grid_step - 1) // grid_step
     grid_w = (width + grid_step - 1) // grid_step
-    coarse_x_coords = np.linspace(0, width - 1, grid_w)
-    coarse_y_coords = np.linspace(0, height - 1, grid_h)
+    coarse_x_coords = coarse_axis_coords(width, grid_w)
+    coarse_y_coords = coarse_axis_coords(height, grid_h)
     coarse_x_mesh, coarse_y_mesh = np.meshgrid(coarse_x_coords, coarse_y_coords)
     map_x, map_y = _mls_affine_map(src_px, dst_px, coarse_x_mesh, coarse_y_mesh)
-    return map_x.astype(np.float32), map_y.astype(np.float32)
+    disp_x = (map_x - coarse_x_mesh).astype(np.float32)
+    disp_y = (map_y - coarse_y_mesh).astype(np.float32)
+    return disp_x, disp_y
 
 
 # デフォルト margin=0.15 用の事前計算済 pin 座標 (hot path で list allocation を避けるため)。

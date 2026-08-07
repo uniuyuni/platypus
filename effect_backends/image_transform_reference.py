@@ -154,6 +154,9 @@ def transform_crop_to_canvas(
         border_mode=border_mode,
     )
     if mesh_map_x is not None and mesh_map_y is not None:
+        # mesh_map_* は絶対座標ではなくキャンバス座標からの「変位」。絶対座標を
+        # bicubic 拡大すると Keys(a=-0.75) が 1 次を再現できず画像全体が波打つため
+        # (cores.distortion_correction.warp_correction.upsample_coarse_mesh_map 参照)。
         full_map_x = cv2.resize(
             np.asarray(mesh_map_x, dtype=np.float32),
             (int(transform_width), int(transform_height)),
@@ -164,6 +167,8 @@ def transform_crop_to_canvas(
             (int(transform_width), int(transform_height)),
             interpolation=cv2.INTER_CUBIC,
         )
+        full_map_x += np.arange(int(transform_width), dtype=np.float32)[None, :]
+        full_map_y += np.arange(int(transform_height), dtype=np.float32)[:, None]
         transformed = cv2.remap(
             transformed,
             full_map_x,
